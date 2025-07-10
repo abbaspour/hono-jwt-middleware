@@ -9,8 +9,8 @@
     "dist"
   ],
   "scripts": {
-    "compile": "tsc --outDir dist",
-    "build": "tsc && tsc-alias",
+    "build": "tsc",
+    "prepare": "npm run build",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write ."

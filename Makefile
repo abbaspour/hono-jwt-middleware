@@ -1,7 +1,7 @@
 all: build
 
 build:
-	npm run compile
+	npm run build
 
 tsc: build
 
