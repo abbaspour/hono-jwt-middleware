@@ -1,6 +1,8 @@
+// noinspection DuplicatedCode
+
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { jwt, requireScope } from '../src/index';
+import {IssuerResolver, jwt, requireScope} from '../src/index';
 import * as jose from 'jose';
 import {type JWTHeaderParameters, JWTPayload} from 'jose';
 
@@ -11,54 +13,45 @@ interface Env {
   };
 }
 
-// Test utilities
-const createMockContext = (headers: Record<string, string> = {}) => {
-  const req = new Request('https://example.com', {
-    headers: new Headers(headers),
-  });
-  const app = new Hono<Env>();
-  return app.handle(req);
-};
-
-// Hard-coded keys for RS256 testing
+// Hard-coded keys for RS256 testing - run make keypair for a new set of keys
 const RS256_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj
-MzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDuictGeurT8jNbvJZHtCSuYEvu
-NMoSfm76oqFvAp8Gy0iz5sxjZmSnXyCdPEovGhLa0VzMaQ8s+CLOyS56YyCFGeJZ
-agU/GCosBKS9ruSkVH0Wc4lnX8W1GTr1dsdmtMofPeLE3KIgHjueHwUlV1+HMqvi
-qB8rdZFsWS6hd2fLOO0Wd/t9QjrQk/KsB9KTcw8GZdNKlYUoTUVPIf+RXQYiP/Io
-E3jdU6QsQWZPqKywGMG6GDuLK6k99d97/TK0OVtE0hDJvkn3D1iqK+22e5K/YYM5
-b0+9AgMBAAECggEAVc6bu7VAnP6v0gDOeX4razv4FX/adCqwv8A0QH6tm2OmmWrL
-5R9+c7Xr1/kJwLn+5p3qasyfQpnmVjUE9nGXj1DRATJ0IN3PjzKL8hR3PQYJpZuF
-z7GWjmPHHqLjvd3I7nnkKQ6dwP0Kn4vWwxkXzjyLpvIIEgxLzrObjqVwkZyTwI1y
-Xr5JIAzAzwMFBwNszsDVFbK6JD5fs4ZGdSYVQQl9+ZMYnFdqFXDTqhkj5+nKpLYt
-hmYEaPMyLfQj62KQNIT1J/wVN00jZGDngrcRtWNGl/tQXQnWg7zKFvIvz9dGCcj0
-PHvN9yMk7E8fqZpeI8EFoetoFbvfWEOuZuqU6M+rAQKBgQDfLNcnS0LzpsS2aK8R
-qDCvDVysATg1NLuiNMNTZDTttVTuZD2FXjgS/u5QGEXYJpMl8eQJqIWwzlMYQbRM
-8zYvDFBHuofQkRUb2GNe2W2tQR+68ZRIzrY/K0bS8P+rBK5V+Rt5kb5tgXQoZIj5
-RKz1lWHJ9fKnrOaFXzPVtC9RXQKBgQDXAiSdY7Yrkl5qTY/Ug3zER4TMbw6+Pdor
-Ks3c313JU8Ufad/SzIBQUUkD6s8FXAOPCvx9aQjh10X9TlQFXn1wGS/RfJK3ScpX
-CTR8+8HR6Nt40Mn5RIjLKVv8n/K5jKn3tU1XnqjFDwfYx2aZGUTJRs5vc2e9xUlV
-tP5Q04AdIQKBgQC+9/lZ8telbpqMqpqwqRaJ8LMn5JYO3ZLynZbKxKbJ7MgCY8pD
-TPUUKpvf/LVN8YhU0uIVNYVHWFTbwj5oqEMC8CtmREPAoaOXnYvSD3HqNQKBUWvz
-tqLFJUDnDZuqsGY2i/rDzPu4UvPpOA7nMj5Vro0sBzksaZaPtZifBs9UhQKBgDQ1
-0O5SRmtU4QDrPT0FDmLdKQhvS+zLsKV/K5N2Uv+8RxLQ7hCOQNGvdvT9pV1UkGpC
-HG9A46ydGQZfzMPkK8AAUPmTjDQNmVUxKQHHzWLDbrO36MkQJl7PRHGf39EuEHBz
-Kk4fUaLoWoX0xYhLKBFNgzBZEwP5Pjki/24lY8+hAoGAW24WXNm3i3JGMzpxZbYo
-0YUmVVIrDyBQYl7hBJcYnK3A8j4dOQMe1TvQ0xpW6JQyzxj3Z2OXz3GLiEXe0YeB
-lXSTJjQfG4vnGXlhv5YX6XKzH3rDc5FCj0tHYrGCQWkgbHrGAKXGGMmL5bP5y1J0
-zO/wIx3fLlu0a+0NtsbADA0=
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDfOLQvUF9mCXDk
+7xJMQalk1O+gZAQkeenS2wrnGKRPc5/VkCNNEENEPFIUiNduLS4byU9Qi936RDjy
+pLB+I5fshx3OrmcuVSVyD7xKSfOVmhy8Z+8u/nkhZfNcBTznHO0Q+n4ZqSrKlm0a
+oQHLXfx55U4AwAyK/NlfZigG0pJgn5Sm+vFPqtYcw2bWd7oTqOtJinjERyVEDAGs
+1d/6WKsE+kd861P1IHTNmeuBg+0sakFXUjGi+LniEGK0PcOymhLvcmVYxu+3d92L
+ixQGlNlNEsBiHsvIoZ40carPu7IVaV/P27LUN5rY1NbmIMhNm5gArWbvIKlxB+5t
+hsQaxYxXAgMBAAECggEAKrOVPIvahBGASDs3u+C/v+tAH+WiKTwtL8n5TvYW0KAk
+zlzxc9eNlqsXZJg85fW8oVIkWxs2jp6oajp5DNhQQs4iNJyGXoWpUSWTdn6pG1BM
++PnE9q91ip8PK+ZQnUGaVConH0+OQQz/uB1e04GaP9NO1bPnclsmViqbs5pqqBLj
+iVvdRfg6fsLCCRiQuZ/TgatpsGmDIq1+WgJO3KHZWoPKMLtKcC5nT3DAZi+lJQ8X
+7nHe8aoY5xK7Kwg7pz9fm4W2XF3rleymZDYF64gZu70uFwVs+O7s0nLH5sIoQtK0
+xtvz1AjuDQZcOL80qhP8QlG09zM1KW3LDX8Jeg+EYQKBgQDz+KlaRb/3jvHdEWzU
+71ciwYLxEC18H5+TyLt4KoBts/ByI4/A+g91Ow9igFrWjgyBt9v+lwhUZBk9XeaL
+9WNuY6owlxUl6ixkCzoORJwcst9aszIqcK8mOQ/Lf+sMfXhK2vKGYOsJxIcK/0nq
+OkQEKLIO7NOJ5L2Ps0JYEip5kQKBgQDqOiTGzbCfj1MLDITn1ViE5EQl/9+D2i+E
+YhQOw298yyT6HTEeUGxi4Dx+saVVqOsSjl/kr5Sej6043PqkUg0STaOI8eD/0JkV
+OT96uuK4Eo4voO0pSiVHDJAyeDlg3JfLmRwq609NGoDHcrRe1eLp5+jmK/6VDLCK
+J3LlwKrzZwKBgQDT2yTEvTj78mdY/x6wsb3K8puQVeoJlTRvkqooqU+o885ibzsP
+6pWtyUGM2cUH94Yoxs4FAIY9MkcwoO/orYhQfb92Plwg9n7hyVX6ud2Olk2aZ22y
+qPOPj5GFt2kXCYWCCyr7QgIYE07pX9KB0WLq8aPdjg4L+lQaCyIbdHrp4QKBgDPx
+rRJBr3fTSzFaF2dqkvT1wn9C3YjaLEuJjLUxdloQmyS0sJ3ua/sJi6D1OJtkmK1G
+0dFfdvArINlJeHRUlf2HJktKiQFye2CPj5piM8FqrAm4AKB1hwrYqGno66Cliyxl
+yi9ie/W3ePPCZmnZuTbybV4OR6k6ZTReR0bYkZDlAoGBAMv7alO7a8U5o3BUBvg2
+gD5zFTwNGfqrJa/J2JlUxg+QnbmA9HwiHfSAXNON2Wb0jx0pZCsX26rYOiJbofOG
+dCl6B2yBWpPaPlMNrQ48ZTuZBvOYkxnN7csEq7yoXSW1mBuL8peLNSFV3Il/S5HN
+NQWCvSgP6B0SnyJqBndZGYXA
 -----END PRIVATE KEY-----`;
 
 const RS256_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo
-4lgOEePzNm0tRgeLezV6ffAt0gunVTLw7onLRnrq0/IzW7yWR7QkrmBL7jTKEn5u
-+qKhbwKfBstIs+bMY2Zkp18gnTxKLxoS2tFczGkPLPgizskuemMghRniWWoFPxgq
-LASkva7kpFR9FnOJZ1/FtRk69XbHZrTKHz3ixNyiIB47nh8FJVdfhzKr4qgfK3WR
-bFkuoXdnyzjtFnf7fUI60JPyrAfSk3MPBmXTSpWFKE1FTyH/kV0GIj/yKBN43VOk
-LEFmT6issBjBuhg7iyupPfXfe/0ytDlbRNIQyb5J9w9YqivttnuSv2GDOW9PvQID
-AQAB
------END PUBLIC KEY-----`;
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3zi0L1BfZglw5O8STEGp
+ZNTvoGQEJHnp0tsK5xikT3Of1ZAjTRBDRDxSFIjXbi0uG8lPUIvd+kQ48qSwfiOX
+7Icdzq5nLlUlcg+8SknzlZocvGfvLv55IWXzXAU85xztEPp+GakqypZtGqEBy138
+eeVOAMAMivzZX2YoBtKSYJ+UpvrxT6rWHMNm1ne6E6jrSYp4xEclRAwBrNXf+lir
+BPpHfOtT9SB0zZnrgYPtLGpBV1Ixovi54hBitD3DspoS73JlWMbvt3fdi4sUBpTZ
+TRLAYh7LyKGeNHGqz7uyFWlfz9uy1Dea2NTW5iDITZuYAK1m7yCpcQfubYbEGsWM
+VwIDAQAB
+-----END PUBLIC KEY-----  `;
 
 describe('JWT Middleware', () => {
   // Test for HS256 tokens
@@ -80,14 +73,14 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
       let userPayload: JWTPayload | null = null;
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver : IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({ 
+      app.use('/protected', jwt({
         issuerResolver
       }));
 
@@ -104,15 +97,16 @@ describe('JWT Middleware', () => {
 
       expect(res.status).toBe(200);
       expect(userPayload).not.toBeNull();
+      if(userPayload == null) { throw new Error('userPayload is null'); }
       expect(userPayload.sub).toBe('test-user');
       expect(userPayload.iss).toBe('https://test-issuer.example.com/');
     });
 
     it('should validate a valid HS256 token with array of issuers', async () => {
       const app = new Hono<Env>();
-      let userPayload: any = null;
+      let userPayload: JWTPayload | null = null;
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver : IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/' || issuer === 'https://other-issuer.example.com/') {
           return secret;
         }
@@ -143,7 +137,7 @@ describe('JWT Middleware', () => {
     it('should reject a token with invalid issuer', async () => {
       const app = new Hono<Env>();
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver : IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://wrong-issuer.example.com/') {
           return secret;
         }
@@ -171,7 +165,7 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
       let userPayload: any = null;
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver : IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
@@ -307,7 +301,7 @@ describe('JWT Middleware', () => {
     it('should allow access with required scope', async () => {
       const app = new Hono();
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
@@ -336,7 +330,7 @@ describe('JWT Middleware', () => {
     it('should deny access without required scope', async () => {
       const app = new Hono<Env>();
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver : IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
@@ -376,7 +370,7 @@ describe('JWT Middleware', () => {
         .setExpirationTime('1h')
         .sign(secret);
 
-      const issuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }

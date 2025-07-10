@@ -3,7 +3,7 @@ import type {MiddlewareHandler} from 'hono/types';
 import * as jose from 'jose';
 import {HTTPException} from 'hono/http-exception';
 
-export type IssuerResolver = (issuer: string, ctx: Context) => Promise<string | URL | jose.CryptoKey>;
+export type IssuerResolver = (issuer: string, ctx: Context) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike>>;
 
 // Base options with dpop but without issuer or issuerResolver
 export type BaseJWTOptions = Omit<jose.JWTVerifyOptions, 'issuer'> & {
@@ -33,7 +33,7 @@ interface ExtendedJWTPayload extends jose.JWTPayload {
   };
 }
 
-// from panva/jose
+// from jose
 function isCloudflareWorkers() {
   return (
     // @ts-ignore
@@ -86,7 +86,7 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
   return async function getKeyAndValidateIssuer(
     header: jose.JWSHeaderParameters,
     jws: jose.FlattenedJWSInput,
-  ): Promise<jose.CryptoKey> {
+  ): Promise<jose.CryptoKey | Uint8Array<ArrayBufferLike>> {
     let iss: string;
     try {
       ({iss} = JSON.parse(decoder.decode(jose.base64url.decode(jws.payload))));
