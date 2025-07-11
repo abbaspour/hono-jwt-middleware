@@ -119,19 +119,6 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
   };
 }
 
-/*
-function unauthorizedResponse(opts: {ctx: Context; error: string; errDescription: string; statusText?: string}) {
-  return new Response('Unauthorized', {
-    status: 401,
-    statusText: opts.statusText,
-    headers: {
-      'WWW-Authenticate': `Bearer realm="${opts.ctx.req.url}",error="${opts.error}",error_description="${opts.errDescription}"`,
-    },
-  });
-}
-*/
-
-// Reusable error response function to reduce code duplication
 function throwHTTPException(status: ContentfulStatusCode, opts: {ctx: Context, message: string, description?: string, cause?: unknown }): never {
 
   const message = opts.message || 'error';
@@ -193,36 +180,15 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
       accessTokenProtectedHeader = verified.protectedHeader;
     } catch (cause: unknown) {
       return throwHTTPException(401, {ctx, message: 'invalid token', description: 'Token verification failure', cause});
-/*
-      console.log('validation exception', e);
-      throw new HTTPException(401, {
-        message: 'Unauthorized',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'invalid_token',
-          statusText: 'Unauthorized',
-          errDescription: 'Token verification failure',
-        }),
-        cause: e,
-      });
-*/
     }
 
     // step 5 - validate dpop if enabled
-    if (options?.dpop && !(await validDPoP(ctx, accessTokenPayload!))) {
-      return throwHTTPException(401, {ctx, message: 'DPoP validation failed', description: 'DoP token verification failure'});
-/*
-      console.log('DPoP validation failed');
-      throw new HTTPException(401, {
-        message: 'Unauthorized',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'invalid_token',
-          statusText: 'Unauthorized',
-          errDescription: 'DPoP verification failure',
-        }),
-      });
-*/
+    if (options?.dpop) {
+        try {
+            await validDPoP(ctx, accessTokenPayload);
+        } catch (cause: unknown) {
+            return throwHTTPException(401, {ctx, message: 'DPoP validation failed', description: 'DoP token verification failure', cause});
+        }
     }
 
     // step 6 - attach token to ctx.user
@@ -242,7 +208,6 @@ async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): 
   }
 
   // Validate DPoP proof for the current resource
-  try {
     const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
 
     //console.log(`DPoP payload: ${JSON.stringify(payload)}, header: ${JSON.stringify(protectedHeader)}`);
@@ -261,120 +226,41 @@ async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): 
     // DPoP validation successful
     console.log('DPoP validation successful');
     return true;
-  } catch (dpopError) {
-    console.log(`dpopError during validation: ${dpopError}`);
-    return false;
-  }
 }
 
 function getToken(ctx: Context, dpop: boolean): string {
   const credentials = ctx.req.raw.headers.get('Authorization');
 
-  if (!credentials) {
+  if (!credentials)
     return throwHTTPException(400, {ctx, message: 'invalid request', description: 'No Authorization header included in request'});
-/*
-    const errDescription = 'No Authorization header included in request';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-*/
-  }
 
   const parts = credentials.split(/\s+/);
-  if (parts.length !== 2) {
+  if (parts.length !== 2)
     return throwHTTPException(400, {ctx, message: 'invalid request', description: 'Invalid Authorization header structure'});
-/*
-    const errDescription = 'Invalid Authorization header structure';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-*/
-  }
 
   const token_type = dpop ? 'DPoP' : 'Bearer';
 
-  if (parts[0] !== token_type) {
+  if (parts[0] !== token_type)
     return throwHTTPException(400, {ctx, message: 'invalid token type',
       description: `Invalid authorization header (only ${token_type} tokens are supported)`});
-/*
-    const errDescription = `Invalid authorization header (only ${token_type} tokens are supported)`;
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-*/
-  }
 
   const token = parts[1];
-  if (!token || token.length === 0) {
+  if (!token || token.length === 0)
     return throwHTTPException(400, {ctx, message: 'token missing', description: 'No token included in request'});
-/*
-
-    const errDescription = 'No token included in request';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-*/
-  }
 
   return token;
 }
-
-/*
-*/
 
 // noinspection JSUnusedGlobalSymbols
 export function requireScope(scope: string): MiddlewareHandler {
   return async function requireScope(ctx, next) {
     console.log(`running requireScope middleware for scope: ${scope}`);
     const payload = ctx.var.user as jose.JWTPayload;
-    if (!payload?.scope) {
-      return throwHTTPException(403, {ctx, message: 'missing scope', description: 'missing scope in access_token'});
-/*
-      throw new HTTPException(403, {
-        message: 'Forbidden',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'insufficient_scope',
-          errDescription: `Missing required scope: ${scope}`,
-        }),
-      });
-*/
-    }
+    if (!payload?.scope) return throwHTTPException(403, {ctx, message: 'missing scope', description: 'missing scope in access_token'});
 
     const scopes = Array.isArray(payload.scope) ? payload.scope : (payload.scope as string).split(' ');
-    if (!scopes || !scopes.includes(scope)) {
+    if (!scopes || !scopes.includes(scope))
       return throwHTTPException(403, {ctx, message: 'insufficient scope', description: `missing required scope: ${scope}`});
-/*
-      throw new HTTPException(403, {
-        message: 'Forbidden',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'insufficient_scope',
-          errDescription: `Missing required scope: ${scope}`,
-        }),
-      });
-*/
-    }
 
     await next();
   };
