@@ -58,7 +58,6 @@ const decoder = new TextDecoder();
 // Cache TTL in seconds for JWKS responses
 const JWKS_CF_CACHE_TTL = 3600; // 1 hour
 
-
 async function fetchWithCloudflareCache(ctx: Context, request: string, init?: RequestInit): Promise<Response> {
   const cacheUrl = new URL(request);
 
@@ -141,24 +140,62 @@ function throwHTTPException(status: ContentfulStatusCode, opts: {ctx: Context; e
   });
 }
 
+async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): Promise<boolean> {
+  // Extract DPoP header
+  const dpopHeader = ctx.req.raw.headers.get('DPoP');
+
+  if (!dpopHeader) throw new Error('DPoP header not found');
+
+  // Validate DPoP proof for the current resource
+  const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
+
+  if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url) throw new Error('DPoP htm/htu not matched');
+
+  const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
+
+  // Compare the token's cnf.jkt claim with the calculated thumbprint
+  if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
+    throw new Error('DPoP proof JWK thumbprint does not match the token cnf.jkt claim');
+  }
+
+  // DPoP validation successful
+  console.log('DPoP validation successful');
+  return true;
+}
+
+function getToken(ctx: Context, dpop: boolean): string {
+  const credentials = ctx.req.raw.headers.get('Authorization');
+
+  if (!credentials) throw new Error('No Authorization header included in request');
+
+  const parts = credentials.split(/\s+/);
+  if (parts.length !== 2) throw new Error('Invalid Authorization header structure');
+
+  const token_type = dpop ? 'DPoP' : 'Bearer';
+
+  if (parts[0] !== token_type) throw new Error(`only ${token_type} tokens supported)`);
+
+  const token = parts[1];
+  if (!token || token.length === 0) throw new Error('No token included in request');
+
+  return token;
+}
+
 // noinspection JSUnusedGlobalSymbols
 export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
-
   const issuerResolver = typeof options?.issuerResolver === 'function' ? (options?.issuerResolver as IssuerResolver) : undefined;
 
   // Initialize static JWKS set once, outside the request handler
-  const staticJWKS = options?.issuer && !issuerResolver
-      ? jose.createRemoteJWKSet(new URL(`${options.issuer}.well-known/jwks.json`))
-      : null;
+  const staticJWKS =
+    options?.issuer && !issuerResolver ? jose.createRemoteJWKSet(new URL(`${options.issuer}.well-known/jwks.json`)) : null;
 
-  if(!(issuerResolver || staticJWKS))
-    throw new Error('Either issuerResolver or a static issuer must be provided');
+  if (!(issuerResolver || staticJWKS)) throw new Error('Either issuerResolver or a static issuer must be provided');
 
   return async function jwt(ctx, next) {
     console.log('running jwt middleware');
 
     // step 2 - fetch token from header
-    let token : string;
+    let token: string;
     try {
       token = getToken(ctx, options?.dpop || false);
     } catch (e) {
@@ -173,7 +210,7 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
       return throwHTTPException(400, {ctx, err: 'error in get key', desc: 'error resolving key', e});
     }
 
-    if(JWKS === null) {
+    if (JWKS === null) {
       return throwHTTPException(400, {ctx, err: 'error in get key', desc: 'resolved key is null'});
     }
 
@@ -206,53 +243,6 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
     await next();
   };
 };
-
-async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): Promise<boolean> {
-  // Extract DPoP header
-  const dpopHeader = ctx.req.raw.headers.get('DPoP');
-
-  if (!dpopHeader)
-    throw new Error('DPoP header not found');
-
-  // Validate DPoP proof for the current resource
-  const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
-
-  if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url)
-    throw new Error('DPoP htm/htu not matched');
-
-  const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
-
-  // Compare the token's cnf.jkt claim with the calculated thumbprint
-  if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
-    throw new Error('DPoP proof JWK thumbprint does not match the token cnf.jkt claim');
-  }
-
-  // DPoP validation successful
-  console.log('DPoP validation successful');
-  return true;
-}
-
-function getToken(ctx: Context, dpop: boolean): string {
-  const credentials = ctx.req.raw.headers.get('Authorization');
-
-  if (!credentials)
-    throw new Error('No Authorization header included in request');
-
-  const parts = credentials.split(/\s+/);
-  if (parts.length !== 2)
-    throw new Error('Invalid Authorization header structure');
-
-  const token_type = dpop ? 'DPoP' : 'Bearer';
-
-  if (parts[0] !== token_type)
-    throw new Error(`only ${token_type} tokens supported)`);
-
-  const token = parts[1];
-  if (!token || token.length === 0)
-    throw new Error('No token included in request');
-
-  return token;
-}
 
 // noinspection JSUnusedGlobalSymbols
 export function requireScope(scope: string): MiddlewareHandler {
