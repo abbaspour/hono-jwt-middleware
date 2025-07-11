@@ -2,9 +2,12 @@ import type {Context} from 'hono';
 import type {MiddlewareHandler} from 'hono/types';
 import * as jose from 'jose';
 import {HTTPException} from 'hono/http-exception';
-import {ContentfulStatusCode} from "hono/dist/types/utils/http-status";
+import {ContentfulStatusCode} from 'hono/dist/types/utils/http-status';
 
-export type IssuerResolver = (issuer: string, ctx: Context) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike>>;
+export type IssuerResolver = (
+  issuer: string,
+  ctx: Context,
+) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike>>;
 
 // Base options with dpop but without issuer or issuerResolver
 export type BaseJWTOptions = Omit<jose.JWTVerifyOptions, 'issuer'> & {
@@ -119,31 +122,26 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
   };
 }
 
-function throwHTTPException(status: ContentfulStatusCode, opts: {ctx: Context, message: string, description?: string, cause?: unknown }): never {
-
-  const message = opts.message || 'error';
-  //const statusText = getReasonPhrase(status);
+function throwHTTPException(status: ContentfulStatusCode, opts: {ctx: Context; err: string; desc?: string; e?: unknown}): never {
+  const message = opts.err || 'unknown error';
 
   throw new HTTPException(status, {
-        message: message,
-        res: new Response(message, {
-          status: status,
-          //statusText,
-          headers: {
-            'WWW-Authenticate': `Bearer realm="${opts.ctx.req.url}",error="${message}",error_description="${opts.description}"`,
-          },
-        }),
-        cause: opts.cause
-      }
-  );
+    message: message,
+    res: new Response(message, {
+      status: status,
+      headers: {
+        'WWW-Authenticate': `Bearer realm="${opts.ctx.req.url}",error="${message}",error_description="${opts.desc}"`,
+      },
+    }),
+    cause: opts.e,
+  });
 }
 
 // noinspection JSUnusedGlobalSymbols
 export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
   let staticJWKS: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
 
-  const issuerResolver =
-    typeof options?.issuerResolver === 'function' ? (options?.issuerResolver as IssuerResolver) : undefined;
+  const issuerResolver = typeof options?.issuerResolver === 'function' ? (options?.issuerResolver as IssuerResolver) : undefined;
 
   return async function jwt(ctx, next) {
     console.log('running jwt middleware');
@@ -178,17 +176,17 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
 
       accessTokenPayload = verified.payload;
       accessTokenProtectedHeader = verified.protectedHeader;
-    } catch (cause: unknown) {
-      return throwHTTPException(401, {ctx, message: 'invalid token', description: 'Token verification failure', cause});
+    } catch (e: unknown) {
+      return throwHTTPException(401, {ctx, err: 'invalid token', desc: 'Token verification failure', e});
     }
 
     // step 5 - validate dpop if enabled
     if (options?.dpop) {
-        try {
-            await validDPoP(ctx, accessTokenPayload);
-        } catch (cause: unknown) {
-            return throwHTTPException(401, {ctx, message: 'DPoP validation failed', description: 'DoP token verification failure', cause});
-        }
+      try {
+        await validDPoP(ctx, accessTokenPayload);
+      } catch (e: unknown) {
+        return throwHTTPException(401, {ctx, err: 'invalid DPoP token', desc: 'DPoP verification failure', e});
+      }
     }
 
     // step 6 - attach token to ctx.user
@@ -208,45 +206,42 @@ async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): 
   }
 
   // Validate DPoP proof for the current resource
-    const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
+  const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
 
-    //console.log(`DPoP payload: ${JSON.stringify(payload)}, header: ${JSON.stringify(protectedHeader)}`);
+  if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url) {
+    return false; // 'DPoP htm/htu not matched'
+  }
 
-    if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url) {
-      return false; // 'DPoP htm/htu not matched'
-    }
+  const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
 
-    const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
+  // Compare the token's cnf.jkt claim with the calculated thumbprint
+  if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
+    return false; // 'DPoP proof JWK thumbprint does not match the token cnf.jkt claim';
+  }
 
-    // Compare the token's cnf.jkt claim with the calculated thumbprint
-    if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
-      return false; // 'DPoP proof JWK thumbprint does not match the token cnf.jkt claim';
-    }
-
-    // DPoP validation successful
-    console.log('DPoP validation successful');
-    return true;
+  // DPoP validation successful
+  console.log('DPoP validation successful');
+  return true;
 }
 
 function getToken(ctx: Context, dpop: boolean): string {
   const credentials = ctx.req.raw.headers.get('Authorization');
 
   if (!credentials)
-    return throwHTTPException(400, {ctx, message: 'invalid request', description: 'No Authorization header included in request'});
+    return throwHTTPException(400, {ctx, err: 'invalid request', desc: 'No Authorization header included in request'});
 
   const parts = credentials.split(/\s+/);
   if (parts.length !== 2)
-    return throwHTTPException(400, {ctx, message: 'invalid request', description: 'Invalid Authorization header structure'});
+    return throwHTTPException(400, {ctx, err: 'invalid request', desc: 'Invalid Authorization header structure'});
 
   const token_type = dpop ? 'DPoP' : 'Bearer';
 
   if (parts[0] !== token_type)
-    return throwHTTPException(400, {ctx, message: 'invalid token type',
-      description: `Invalid authorization header (only ${token_type} tokens are supported)`});
+    return throwHTTPException(400, {ctx, err: 'invalid token type', desc: `only ${token_type} tokens supported)`});
 
   const token = parts[1];
   if (!token || token.length === 0)
-    return throwHTTPException(400, {ctx, message: 'token missing', description: 'No token included in request'});
+    return throwHTTPException(400, {ctx, err: 'token missing', desc: 'No token included in request'});
 
   return token;
 }
@@ -256,11 +251,15 @@ export function requireScope(scope: string): MiddlewareHandler {
   return async function requireScope(ctx, next) {
     console.log(`running requireScope middleware for scope: ${scope}`);
     const payload = ctx.var.user as jose.JWTPayload;
-    if (!payload?.scope) return throwHTTPException(403, {ctx, message: 'missing scope', description: 'missing scope in access_token'});
+    if (!payload?.scope) return throwHTTPException(403, {ctx, err: 'missing scope', desc: 'missing scope in access_token'});
 
     const scopes = Array.isArray(payload.scope) ? payload.scope : (payload.scope as string).split(' ');
     if (!scopes || !scopes.includes(scope))
-      return throwHTTPException(403, {ctx, message: 'insufficient scope', description: `missing required scope: ${scope}`});
+      return throwHTTPException(403, {
+        ctx,
+        err: 'insufficient scope',
+        desc: `missing required scope: ${scope}`,
+      });
 
     await next();
   };

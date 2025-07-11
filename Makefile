@@ -8,6 +8,9 @@ tsc: build
 test:
 	npm run test
 
+format:
+	npm run format
+
 keypair:
 	openssl genrsa -out private.pem 2048
 	openssl pkcs8 -topk8 -nocrypt -in private.pem -out pkcs8_private.pem

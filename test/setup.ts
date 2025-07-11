@@ -1,4 +1,4 @@
-import { vi } from 'vitest';
+import {vi} from 'vitest';
 
 // Mock the isCloudflareWorkers function to return false for tests
 vi.mock('../src/index', async (importOriginal) => {
@@ -22,7 +22,7 @@ if (!('caches' in globalThis)) {
   globalThis.caches = {
     default: {
       match: vi.fn().mockResolvedValue(null),
-      put: vi.fn().mockResolvedValue(undefined)
-    }
+      put: vi.fn().mockResolvedValue(undefined),
+    },
   };
 }

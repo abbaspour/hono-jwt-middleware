@@ -1,7 +1,7 @@
 // noinspection DuplicatedCode
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { Hono } from 'hono';
+import {describe, it, expect, beforeEach} from 'vitest';
+import {Hono} from 'hono';
 import {IssuerResolver, jwt, requireScope} from '../src/index';
 import * as jose from 'jose';
 import {type JWTHeaderParameters, JWTPayload} from 'jose';
@@ -61,8 +61,8 @@ describe('JWT Middleware', () => {
 
     beforeEach(async () => {
       // Create a valid HS256 token
-      validToken = await new jose.SignJWT({ sub: 'test-user', scope: 'read:data' })
-        .setProtectedHeader({ alg: 'HS256' })
+      validToken = await new jose.SignJWT({sub: 'test-user', scope: 'read:data'})
+        .setProtectedHeader({alg: 'HS256'})
         .setIssuedAt()
         .setIssuer('https://test-issuer.example.com/')
         .setExpirationTime('1h')
@@ -73,31 +73,38 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
       let userPayload: JWTPayload | null = null;
 
-      const issuerResolver : IssuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         userPayload = c.get('user');
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(userPayload).not.toBeNull();
-      if(userPayload == null) { throw new Error('userPayload is null'); }
+      if (userPayload == null) {
+        throw new Error('userPayload is null');
+      }
       expect(userPayload.sub).toBe('test-user');
       expect(userPayload.iss).toBe('https://test-issuer.example.com/');
     });
@@ -106,27 +113,32 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
       let userPayload: JWTPayload | null = null;
 
-      const issuerResolver : IssuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/' || issuer === 'https://other-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         userPayload = c.get('user');
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(userPayload).not.toBeNull();
@@ -137,26 +149,31 @@ describe('JWT Middleware', () => {
     it('should reject a token with invalid issuer', async () => {
       const app = new Hono<Env>();
 
-      const issuerResolver : IssuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://wrong-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(401);
     });
@@ -165,27 +182,32 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
       let userPayload: any = null;
 
-      const issuerResolver : IssuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         userPayload = c.get('user');
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(userPayload).not.toBeNull();
@@ -206,8 +228,8 @@ describe('JWT Middleware', () => {
       publicKey = await jose.importSPKI(RS256_PUBLIC_KEY, 'RS256');
 
       // Create a valid RS256 token
-      validToken = await new jose.SignJWT({ sub: 'test-user', scope: 'read:data' })
-        .setProtectedHeader({ alg: 'RS256' })
+      validToken = await new jose.SignJWT({sub: 'test-user', scope: 'read:data'})
+        .setProtectedHeader({alg: 'RS256'})
         .setIssuedAt()
         .setIssuer('https://rs256-issuer.example.com/')
         .setExpirationTime('1h')
@@ -225,20 +247,25 @@ describe('JWT Middleware', () => {
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         userPayload = c.get('user');
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
       expect(userPayload).not.toBeNull();
@@ -256,19 +283,24 @@ describe('JWT Middleware', () => {
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.get('/protected', (c) => {
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${validToken}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${validToken}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(401);
     });
@@ -282,16 +314,16 @@ describe('JWT Middleware', () => {
 
     beforeEach(async () => {
       // Create a token with scope
-      tokenWithScope = await new jose.SignJWT({ sub: 'test-user', scope: 'read:data write:data' })
-        .setProtectedHeader({ alg: 'HS256' })
+      tokenWithScope = await new jose.SignJWT({sub: 'test-user', scope: 'read:data write:data'})
+        .setProtectedHeader({alg: 'HS256'})
         .setIssuedAt()
         .setIssuer('https://test-issuer.example.com/')
         .setExpirationTime('1h')
         .sign(secret);
 
       // Create a token without the required scope
-      tokenWithoutScope = await new jose.SignJWT({ sub: 'test-user', scope: 'read:profile' })
-        .setProtectedHeader({ alg: 'HS256' })
+      tokenWithoutScope = await new jose.SignJWT({sub: 'test-user', scope: 'read:profile'})
+        .setProtectedHeader({alg: 'HS256'})
         .setIssuedAt()
         .setIssuer('https://test-issuer.example.com/')
         .setExpirationTime('1h')
@@ -308,9 +340,12 @@ describe('JWT Middleware', () => {
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.use('/protected', requireScope('read:data'));
 
@@ -318,11 +353,13 @@ describe('JWT Middleware', () => {
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${tokenWithScope}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${tokenWithScope}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
     });
@@ -330,16 +367,19 @@ describe('JWT Middleware', () => {
     it('should deny access without required scope', async () => {
       const app = new Hono<Env>();
 
-      const issuerResolver : IssuerResolver = async (issuer: string) => {
+      const issuerResolver: IssuerResolver = async (issuer: string) => {
         if (issuer === 'https://test-issuer.example.com/') {
           return secret;
         }
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.use('/protected', requireScope('write:data'));
 
@@ -347,11 +387,13 @@ describe('JWT Middleware', () => {
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${tokenWithoutScope}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${tokenWithoutScope}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(403);
     });
@@ -360,11 +402,11 @@ describe('JWT Middleware', () => {
       const app = new Hono<Env>();
 
       // Create a token with scope as array
-      const tokenWithArrayScope = await new jose.SignJWT({ 
-        sub: 'test-user', 
-        scope: ['read:data', 'write:data'] 
+      const tokenWithArrayScope = await new jose.SignJWT({
+        sub: 'test-user',
+        scope: ['read:data', 'write:data'],
       })
-        .setProtectedHeader({ alg: 'HS256' })
+        .setProtectedHeader({alg: 'HS256'})
         .setIssuedAt()
         .setIssuer('https://test-issuer.example.com/')
         .setExpirationTime('1h')
@@ -377,9 +419,12 @@ describe('JWT Middleware', () => {
         return null;
       };
 
-      app.use('/protected', jwt({ 
-        issuerResolver
-      }));
+      app.use(
+        '/protected',
+        jwt({
+          issuerResolver,
+        }),
+      );
 
       app.use('/protected', requireScope('write:data'));
 
@@ -387,11 +432,13 @@ describe('JWT Middleware', () => {
         return c.text('Protected');
       });
 
-      const res = await app.fetch(new Request('https://example.com/protected', {
-        headers: {
-          'Authorization': `Bearer ${tokenWithArrayScope}`
-        }
-      }));
+      const res = await app.fetch(
+        new Request('https://example.com/protected', {
+          headers: {
+            Authorization: `Bearer ${tokenWithArrayScope}`,
+          },
+        }),
+      );
 
       expect(res.status).toBe(200);
     });
