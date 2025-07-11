@@ -54,14 +54,14 @@ app.use('/api/*', (c, next) => {
 });
 
 app.get('/api/applications/:id', requireScope('read'), (c) => {
-    const id = c.req.param('id');
-    const application = getJobApplicationById(id);
+  const id = c.req.param('id');
+  const application = getJobApplicationById(id);
 
-    if (!application) {
-        return c.json({error: 'Application not found'}, 404);
-    }
+  if (!application) {
+    return c.json({error: 'Application not found'}, 404);
+  }
 
-    return c.json(application);
+  return c.json(application);
 });
 
 export default app;

@@ -13,7 +13,9 @@
     "prepare": "npm run build",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "hono",
@@ -40,7 +42,9 @@
     "eslint-plugin-prettier": "^5.5.1",
     "prettier": "^3.6.2",
     "ts-jest": "^29.4.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^1.0.0",
+    "hono": "^4.8.0"
   },
   "dependencies": {
     "jose": "^6.0.11"

@@ -2,8 +2,12 @@ import type {Context} from 'hono';
 import type {MiddlewareHandler} from 'hono/types';
 import * as jose from 'jose';
 import {HTTPException} from 'hono/http-exception';
+import {ContentfulStatusCode} from 'hono/dist/types/utils/http-status';
 
-export type IssuerResolver = (issuer: string, ctx: Context) => Promise<string | URL | jose.CryptoKey>;
+export type IssuerResolver = (
+  issuer: string,
+  ctx: Context,
+) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike>>;
 
 // Base options with dpop but without issuer or issuerResolver
 export type BaseJWTOptions = Omit<jose.JWTVerifyOptions, 'issuer'> & {
@@ -33,7 +37,7 @@ interface ExtendedJWTPayload extends jose.JWTPayload {
   };
 }
 
-// from panva/jose
+// from jose
 function isCloudflareWorkers() {
   return (
     // @ts-ignore
@@ -50,6 +54,9 @@ const jwksCache: jose.JWKSCacheInput = {};
 const cache = caches.default;
 
 const decoder = new TextDecoder();
+
+// Cache TTL in seconds for JWKS responses
+const JWKS_CF_CACHE_TTL = 3600; // 1 hour
 
 async function fetchWithCloudflareCache(ctx: Context, request: string, init?: RequestInit): Promise<Response> {
   const cacheUrl = new URL(request);
@@ -73,7 +80,7 @@ async function fetchWithCloudflareCache(ctx: Context, request: string, init?: Re
     // will limit the response to be in cache for 10 seconds max
 
     // Any changes made to the response here will be reflected in the cached value
-    response.headers.append('Cache-Control', 's-maxage=10'); // Note: how long to cache in Cloudflare cache
+    response.headers.append('Cache-Control', `s-maxage=${JWKS_CF_CACHE_TTL}`); // Note: how long to cache in Cloudflare cache
 
     ctx.executionCtx.waitUntil(cache.put(cacheKey, response.clone()));
   } else {
@@ -86,7 +93,7 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
   return async function getKeyAndValidateIssuer(
     header: jose.JWSHeaderParameters,
     jws: jose.FlattenedJWSInput,
-  ): Promise<jose.CryptoKey> {
+  ): Promise<jose.CryptoKey | Uint8Array<ArrayBufferLike>> {
     let iss: string;
     try {
       ({iss} = JSON.parse(decoder.decode(jose.base64url.decode(jws.payload))));
@@ -118,35 +125,93 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
   };
 }
 
+function throwHTTPException(status: ContentfulStatusCode, opts: {ctx: Context; err: string; desc?: string; e?: unknown}): never {
+  const message = opts.err || 'unknown error';
+
+  throw new HTTPException(status, {
+    message: message,
+    res: new Response(message, {
+      status: status,
+      headers: {
+        'WWW-Authenticate': `Bearer realm="${opts.ctx.req.url}",error="${message}",error_description="${opts.desc}"`,
+      },
+    }),
+    cause: opts.e,
+  });
+}
+
+async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): Promise<boolean> {
+  // Extract DPoP header
+  const dpopHeader = ctx.req.raw.headers.get('DPoP');
+
+  if (!dpopHeader) throw new Error('DPoP header not found');
+
+  // Validate DPoP proof for the current resource
+  const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
+
+  if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url) throw new Error('DPoP htm/htu not matched');
+
+  const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
+
+  // Compare the token's cnf.jkt claim with the calculated thumbprint
+  if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
+    throw new Error('DPoP proof JWK thumbprint does not match the token cnf.jkt claim');
+  }
+
+  // DPoP validation successful
+  console.log('DPoP validation successful');
+  return true;
+}
+
+function getToken(ctx: Context, dpop: boolean): string {
+  const credentials = ctx.req.raw.headers.get('Authorization');
+
+  if (!credentials) throw new Error('No Authorization header included in request');
+
+  const parts = credentials.split(/\s+/);
+  if (parts.length !== 2) throw new Error('Invalid Authorization header structure');
+
+  const token_type = dpop ? 'DPoP' : 'Bearer';
+
+  if (parts[0] !== token_type) throw new Error(`only ${token_type} tokens supported)`);
+
+  const token = parts[1];
+  if (!token || token.length === 0) throw new Error('No token included in request');
+
+  return token;
+}
+
 // noinspection JSUnusedGlobalSymbols
 export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
-  let staticJWKS: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
+  const issuerResolver = typeof options?.issuerResolver === 'function' ? (options?.issuerResolver as IssuerResolver) : undefined;
 
-  const issuerResolver =
-    typeof options?.issuerResolver === 'function' ? (options?.issuerResolver as IssuerResolver) : undefined;
+  // Initialize static JWKS set once, outside the request handler
+  const staticJWKS =
+    options?.issuer && !issuerResolver ? jose.createRemoteJWKSet(new URL(`${options.issuer}.well-known/jwks.json`)) : null;
+
+  if (!(issuerResolver || staticJWKS)) throw new Error('Either issuerResolver or a static issuer must be provided');
 
   return async function jwt(ctx, next) {
     console.log('running jwt middleware');
 
     // step 2 - fetch token from header
-    const token = getToken(ctx, options?.dpop || false);
+    let token: string;
+    try {
+      token = getToken(ctx, options?.dpop || false);
+    } catch (e) {
+      return throwHTTPException(400, {ctx, err: 'invalid request', desc: 'no token found', e});
+    }
 
     // step 3 - find suitable access_token validation key
-    let JWKS;
+    let JWKS = issuerResolver ? buildGetKeyAndValidateIssuer(issuerResolver, ctx) : staticJWKS;
+    try {
+      JWKS = issuerResolver ? buildGetKeyAndValidateIssuer(issuerResolver, ctx) : staticJWKS;
+    } catch (e) {
+      return throwHTTPException(400, {ctx, err: 'error in get key', desc: 'error resolving key', e});
+    }
 
-    if (issuerResolver) {
-      JWKS = buildGetKeyAndValidateIssuer(issuerResolver, ctx);
-    } else {
-      if (staticJWKS) {
-        JWKS = staticJWKS;
-      } else {
-        if (options?.issuer) {
-          staticJWKS = jose.createRemoteJWKSet(new URL(`${options.issuer}.well-known/jwks.json`));
-        } else {
-          throw new Error('Either issuerResolver or issuer must be provided');
-        }
-      }
-      JWKS = staticJWKS;
+    if (JWKS === null) {
+      return throwHTTPException(400, {ctx, err: 'error in get key', desc: 'resolved key is null'});
     }
 
     // step 4 - validate access_token
@@ -158,32 +223,17 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
 
       accessTokenPayload = verified.payload;
       accessTokenProtectedHeader = verified.protectedHeader;
-    } catch (e) {
-      console.log('validation exception', e);
-      throw new HTTPException(401, {
-        message: 'Unauthorized',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'invalid_token',
-          statusText: 'Unauthorized',
-          errDescription: 'Token verification failure',
-        }),
-        cause: e,
-      });
+    } catch (e: unknown) {
+      return throwHTTPException(401, {ctx, err: 'invalid token', desc: 'Token verification failure', e});
     }
 
     // step 5 - validate dpop if enabled
-    if (options?.dpop && !(await validDPoP(ctx, accessTokenPayload!))) {
-      console.log('DPoP validation failed');
-      throw new HTTPException(401, {
-        message: 'Unauthorized',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'invalid_token',
-          statusText: 'Unauthorized',
-          errDescription: 'DPoP verification failure',
-        }),
-      });
+    if (options?.dpop) {
+      try {
+        await validDPoP(ctx, accessTokenPayload);
+      } catch (e: unknown) {
+        return throwHTTPException(401, {ctx, err: 'invalid DPoP token', desc: 'DPoP verification failure', e});
+      }
     }
 
     // step 6 - attach token to ctx.user
@@ -194,135 +244,20 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
   };
 };
 
-async function validDPoP(ctx: Context, accessTokenPayload: ExtendedJWTPayload): Promise<boolean> {
-  // Extract DPoP header
-  const dpopHeader = ctx.req.raw.headers.get('DPoP');
-
-  if (!dpopHeader) {
-    return false;
-  }
-
-  // Validate DPoP proof for the current resource
-  try {
-    const {payload, protectedHeader} = await jose.jwtVerify(dpopHeader, jose.EmbeddedJWK, {});
-
-    //console.log(`DPoP payload: ${JSON.stringify(payload)}, header: ${JSON.stringify(protectedHeader)}`);
-
-    if (payload?.htm !== ctx.req.method || payload?.htu !== ctx.req.url) {
-      return false; // 'DPoP htm/htu not matched'
-    }
-
-    const calculatedThumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk as jose.JWK);
-
-    // Compare the token's cnf.jkt claim with the calculated thumbprint
-    if (accessTokenPayload?.cnf?.jkt !== calculatedThumbprint) {
-      return false; // 'DPoP proof JWK thumbprint does not match the token cnf.jkt claim';
-    }
-
-    // DPoP validation successful
-    console.log('DPoP validation successful');
-    return true;
-  } catch (dpopError) {
-    console.log(`dpopError during validation: ${dpopError}`);
-    return false;
-  }
-}
-
-function getToken(ctx: Context, dpop: boolean): string {
-  const credentials = ctx.req.raw.headers.get('Authorization');
-
-  if (!credentials) {
-    const errDescription = 'No Authorization header included in request';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-  }
-
-  const parts = credentials.split(/\s+/);
-  if (parts.length !== 2) {
-    const errDescription = 'Invalid Authorization header structure';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-  }
-
-  const token_type = dpop ? 'DPoP' : 'Bearer';
-
-  if (parts[0] !== token_type) {
-    const errDescription = `Invalid authorization header (only ${token_type} tokens are supported)`;
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-  }
-
-  const token = parts[1];
-  if (!token || token.length === 0) {
-    const errDescription = 'No token included in request';
-    throw new HTTPException(401, {
-      message: errDescription,
-      res: unauthorizedResponse({
-        ctx,
-        error: 'invalid_request',
-        errDescription,
-      }),
-    });
-  }
-
-  return token;
-}
-
-function unauthorizedResponse(opts: {ctx: Context; error: string; errDescription: string; statusText?: string}) {
-  return new Response('Unauthorized', {
-    status: 401,
-    statusText: opts.statusText,
-    headers: {
-      'WWW-Authenticate': `Bearer realm="${opts.ctx.req.url}",error="${opts.error}",error_description="${opts.errDescription}"`,
-    },
-  });
-}
-
 // noinspection JSUnusedGlobalSymbols
 export function requireScope(scope: string): MiddlewareHandler {
   return async function requireScope(ctx, next) {
     console.log(`running requireScope middleware for scope: ${scope}`);
     const payload = ctx.var.user as jose.JWTPayload;
-    if (!payload?.scope) {
-      throw new HTTPException(403, {
-        message: 'Forbidden',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'insufficient_scope',
-          errDescription: `Missing required scope: ${scope}`,
-        }),
-      });
-    }
+    if (!payload?.scope) return throwHTTPException(403, {ctx, err: 'missing scope', desc: 'missing scope in access_token'});
 
     const scopes = Array.isArray(payload.scope) ? payload.scope : (payload.scope as string).split(' ');
-    if (!scopes || !scopes.includes(scope)) {
-      throw new HTTPException(403, {
-        message: 'Forbidden',
-        res: unauthorizedResponse({
-          ctx,
-          error: 'insufficient_scope',
-          errDescription: `Missing required scope: ${scope}`,
-        }),
+    if (!scopes || !scopes.includes(scope))
+      return throwHTTPException(403, {
+        ctx,
+        err: 'insufficient scope',
+        desc: `missing required scope: ${scope}`,
       });
-    }
 
     await next();
   };
