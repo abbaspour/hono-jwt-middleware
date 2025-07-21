@@ -7,7 +7,7 @@ import {ContentfulStatusCode} from 'hono/dist/types/utils/http-status';
 export type IssuerResolver = (
   issuer: string,
   ctx: Context,
-) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike>>;
+) => Promise<string | URL | jose.CryptoKey | Uint8Array<ArrayBufferLike> | null>;
 
 // Base options with dpop but without issuer or issuerResolver
 export type BaseJWTOptions = Omit<jose.JWTVerifyOptions, 'issuer'> & {
@@ -58,6 +58,29 @@ const decoder = new TextDecoder();
 // Cache TTL in seconds for JWKS responses
 const JWKS_CF_CACHE_TTL = 3600; // 1 hour
 
+/**
+ * Converts an issuer string to a JWKS URL
+ * @param input The issuer string or strings[]
+ * @returns The JWKS URL for the issuer
+ */
+function toJwksURL(input: string | string[]): URL {
+  let issuer = Array.isArray(input) ? input[0] : input;
+
+  // If issuer doesn't start with http:// or https://, append https://
+  if (!issuer.startsWith('http://') && !issuer.startsWith('https://')) {
+    issuer = 'https://' + issuer;
+  }
+  
+  // If issuer doesn't end with /, add it
+  if (!issuer.endsWith('/')) {
+    issuer = issuer + '/';
+  }
+  
+  // Append .well-known/jwks.json to the issuer
+  return new URL(issuer + '.well-known/jwks.json');
+}
+
+
 async function fetchWithCloudflareCache(ctx: Context, request: string, init?: RequestInit): Promise<Response> {
   const cacheUrl = new URL(request);
 
@@ -73,7 +96,7 @@ async function fetchWithCloudflareCache(ctx: Context, request: string, init?: Re
     // If not in cache, get it from origin
     response = await fetch(request, init);
 
-    // Must use Response constructor to inherit all of response's fields
+    // Must use Response constructor to inherit all the response's fields
     response = new Response(response.body, response);
 
     // Cache API respects Cache-Control headers. Setting s-max-age to 10
@@ -112,7 +135,7 @@ function buildGetKeyAndValidateIssuer(issuerResolver: IssuerResolver, ctx: Conte
     }
 
     if (typeof key === 'string' || key instanceof URL) {
-      const jwksUrl: URL = typeof key === 'string' ? new URL(key) : key;
+      const jwksUrl: URL = typeof key === 'string' ? toJwksURL(key) : key;
 
       return jose.createRemoteJWKSet(jwksUrl, {
         [jose.customFetch]: (url: string, options) =>
@@ -187,7 +210,7 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
 
   // Initialize static JWKS set once, outside the request handler
   const staticJWKS =
-    options?.issuer && !issuerResolver ? jose.createRemoteJWKSet(new URL(`${options.issuer}.well-known/jwks.json`)) : null;
+    options?.issuer && !issuerResolver ? jose.createRemoteJWKSet(toJwksURL(options.issuer)) : null; // TODO: cater for issuer[]
 
   if (!(issuerResolver || staticJWKS)) throw new Error('Either issuerResolver or a static issuer must be provided');
 
@@ -203,7 +226,7 @@ export const jwt = (options?: ExtendedJWTVerifyOptions): MiddlewareHandler => {
     }
 
     // step 3 - find suitable access_token validation key
-    let JWKS = issuerResolver ? buildGetKeyAndValidateIssuer(issuerResolver, ctx) : staticJWKS;
+    let JWKS : jose.JWTVerifyGetKey | null = null;
     try {
       JWKS = issuerResolver ? buildGetKeyAndValidateIssuer(issuerResolver, ctx) : staticJWKS;
     } catch (e) {
